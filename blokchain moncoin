@@ -1,0 +1,171 @@
+#include <iostream>
+#include <vector>
+#include <ctime>
+#include <sstream>
+#include <iomanip>
+#include <openssl/sha.h>
+#include <openssl/ec.h>
+#include <openssl/obj_mac.h>
+#include <openssl/ecdsa.h>
+#include <openssl/pem.h>
+#include <leveldb/db.h>
+#include <leveldb/write_batch.h>
+#include <unordered_map>
+#include <thread>
+#include <mutex>
+#include <random>
+#include <libp2p/host/host.hpp>
+#include <libp2p/protocol/kademlia/kademlia.hpp>
+#include <libp2p/transport/tcp.hpp>
+
+using namespace std;
+
+mutex blockchainMutex;
+const double INITIAL_MINING_REWARD = 50.0;
+const int BLOCK_GENERATION_INTERVAL = 600; // 10 menit
+const int DIFFICULTY_ADJUSTMENT_INTERVAL = 2016; // Seperti Bitcoin
+const int HALVING_INTERVAL = 210000; // Halving setiap 210.000 blok
+const double MAX_SUPPLY = 25000000.0; // Batas maksimal Moncoin
+const string BLOCKCHAIN_DB = "moncoin_chain.db";
+const string UTXO_DB = "moncoin_utxo.db";
+
+leveldb::DB* blockchainDB;
+leveldb::DB* utxoDB;
+int currentDifficulty = 4;
+double totalMined = 0.0;
+
+// Fungsi logging
+void log(const string &message) {
+    cout << "[LOG] " << message << endl;
+}
+
+// Fungsi untuk membuat hash SHA-256
+string sha256(const string &input) {
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    SHA256((unsigned char*)input.c_str(), input.size(), hash);
+    
+    stringstream ss;
+    for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
+        ss << hex << setw(2) << setfill('0') << (int)hash[i];
+    }
+    return ss.str();
+}
+
+// Fungsi untuk menghitung Merkle Root
+string calculateMerkleRoot(vector<string> transactionHashes) {
+    if (transactionHashes.empty()) return "";
+    
+    while (transactionHashes.size() > 1) {
+        if (transactionHashes.size() % 2 != 0) {
+            transactionHashes.push_back(transactionHashes.back());
+        }
+        vector<string> newLevel;
+        for (size_t i = 0; i < transactionHashes.size(); i += 2) {
+            newLevel.push_back(sha256(transactionHashes[i] + transactionHashes[i + 1]));
+        }
+        transactionHashes = newLevel;
+    }
+    return transactionHashes[0];
+}
+
+// Struktur Transaksi dengan UTXO Model
+struct Transaction {
+    string sender;
+    string receiver;
+    double amount;
+    string transactionHash;
+    int nonce;
+
+    Transaction(string from, string to, double amt, int txNonce) {
+        sender = from;
+        receiver = to;
+        amount = amt;
+        nonce = txNonce;
+        transactionHash = sha256(sender + receiver + to_string(amount) + to_string(nonce));
+    }
+};
+
+// Struktur Block
+class Block {
+public:
+    int index;
+    string previousHash;
+    string hash;
+    string merkleRoot;
+    vector<Transaction> transactions;
+    time_t timestamp;
+    int nonce;
+    double reward;
+
+    Block(int idx, string prevHash, vector<Transaction> txs, double rewardAmount) {
+        index = idx;
+        previousHash = prevHash;
+        transactions = txs;
+        timestamp = time(0);
+        nonce = 0;
+        reward = rewardAmount;
+        
+        vector<string> transactionHashes;
+        for (const auto& tx : transactions) {
+            transactionHashes.push_back(tx.transactionHash);
+        }
+        merkleRoot = calculateMerkleRoot(transactionHashes);
+        
+        mineBlock();
+    }
+
+    void mineBlock() {
+        do {
+            nonce++;
+            hash = sha256(to_string(index) + previousHash + merkleRoot + to_string(timestamp) + to_string(nonce));
+        } while (hash.substr(0, currentDifficulty) != string(currentDifficulty, '0'));
+        log("Block mined: " + hash);
+    }
+};
+
+// Struktur Blockchain dengan LevelDB dan UTXO Model
+class Blockchain {
+public:
+    Blockchain() {
+        leveldb::Options options;
+        options.create_if_missing = true;
+        leveldb::DB::Open(options, BLOCKCHAIN_DB, &blockchainDB);
+        leveldb::DB::Open(options, UTXO_DB, &utxoDB);
+    }
+    
+    double getMiningReward() {
+        int latestIndex = getLatestBlockIndex();
+        int halvings = latestIndex / HALVING_INTERVAL;
+        return INITIAL_MINING_REWARD / pow(2, halvings);
+    }
+    
+    void saveBlock(int index, const Block& block) {
+        leveldb::WriteBatch batch;
+        batch.Put(to_string(index), block.hash);
+        batch.Put("latest_index", to_string(index));
+        blockchainDB->Write(leveldb::WriteOptions(), &batch);
+    }
+    
+    bool validateTransaction(const Transaction& tx) {
+        string balanceStr;
+        if (!utxoDB->Get(leveldb::ReadOptions(), tx.sender, &balanceStr).ok()) return false;
+        double balance = stod(balanceStr);
+        return balance >= tx.amount;
+    }
+};
+
+// Implementasi P2P Network dengan libp2p
+class P2PNetwork {
+public:
+    void start() {
+        log("Starting P2P network using libp2p...");
+        // Tambahkan kode untuk membuat dan menjalankan node libp2p
+    }
+};
+
+int main() {
+    Blockchain moncoin;
+    P2PNetwork p2p;
+    p2p.start();
+    return 0;
+}
